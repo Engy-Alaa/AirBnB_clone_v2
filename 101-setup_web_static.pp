@@ -1,62 +1,43 @@
-# Script that configures Nginx server with some folders and files
+#!/bin/bash
 
-exec {'update':
-  provider => shell,
-  command  => 'sudo apt-get -y update',
-  before   => Exec['install Nginx'],
-}
 
-exec {'install Nginx':
-  provider => shell,
-  command  => 'sudo apt-get -y install nginx',
-  before   => Exec['start Nginx'],
-}
+# Create the necessary directories if they do not already exist
+sudo mkdir -p /data/web_static/{releases,test,shared}
 
-exec {'start Nginx':
-  provider => shell,
-  command  => 'sudo service nginx start',
-  before   => Exec['create first directory'],
-}
+# Create a fake HTML file
+sudo echo "<html><body>Test HTML file</body></html>" | sudo tee /data/web_static/releases/test/index.html
 
-exec {'create first directory':
-  provider => shell,
-  command  => 'sudo mkdir -p /data/web_static/releases/test/',
-  before   => Exec['create second directory'],
-}
+# Create a symbolic link /data/web_static/current linked to the /data/web_static/releases/test/ folder
+sudo ln -sf /data/web_static/releases/test/ /data/web_static/current
 
-exec {'create second directory':
-  provider => shell,
-  command  => 'sudo mkdir -p /data/web_static/shared/',
-  before   => Exec['content into html'],
-}
+# Give ownership of the /data/ folder to the ubuntu user AND group
+sudo chown -R ubuntu:ubuntu /data
 
-exec {'content into html':
-  provider => shell,
-  command  => 'echo "Holberton School" | sudo tee /data/web_static/releases/test/index.html',
-  before   => Exec['symbolic link'],
-}
+# Use Puppet to update the Nginx configuration
+sudo apt-get install puppet -y
+sudo puppet apply -e '
+  package { "nginx":
+    ensure => installed,
+  }
 
-exec {'symbolic link':
-  provider => shell,
-  command  => 'sudo ln -sf /data/web_static/releases/test/ /data/web_static/current',
-  before   => Exec['put location'],
-}
+  file { "/etc/nginx/sites-available/default":
+    content => "
+      server {
+          listen 80;
+          listen [::]:80 default_server;
+          server_name _;
+          location /hbnb_static/ {
+              alias /data/web_static/current/;
+              index index.html;
+          }
+      }
+    ",
+    notify => Service["nginx"],
+  }
 
-exec {'put location':
-  provider => shell,
-  command  => 'sudo sed -i \'38i\\tlocation /hbnb_static/ {\n\t\talias /data/web_static/current/;\n\t\tautoindex off;\n\t}\n\' /etc/nginx/sites-available/default',
-  before   => Exec['restart Nginx'],
-}
-
-exec {'restart Nginx':
-  provider => shell,
-  command  => 'sudo service nginx restart',
-  before   => File['/data/']
-}
-
-file {'/data/':
-  ensure  => directory,
-  owner   => 'ubuntu',
-  group   => 'ubuntu',
-  recurse => true,
-}
+  service { "nginx":
+    ensure    => "running",
+    enable    => true,
+    subscribe => File["/etc/nginx/sites-available/default"],
+  }
+'
